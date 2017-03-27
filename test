@@ -1,0 +1,916 @@
+import com.cloudbees.groovy.cps.NonCPS
+import groovy.json.JsonOutput
+import hudson.model.ParameterValue
+import hudson.model.ParametersAction
+import hudson.FilePath
+import hudson.remoting.LocalChannel
+import hudson.model.User
+import org.jenkinsci.plugins.workflow.support.steps.input.ApproverAction
+import javax.annotation.Nullable
+
+def en = new com.test.jenkins.workflow.env.Env();
+l = new com.test.jenkins.workflow.log.Logger();
+def validate = new com.test.jenkins.workflow.validation.Validator()
+def Workflowbuild = new com.test.jenkins.workflow.build.Build()
+def RTCSCM = new com.test.jenkins.workflow.scm.RTC()
+def GITSCM = new com.test.jenkins.workflow.scm.Git()
+def SVNSCM = new com.test.jenkins.workflow.scm.Svn()
+def JunitPublishing = new com.test.jenkins.workflow.publishing.Junit()
+def htmlPublishing = new com.test.jenkins.workflow.publishing.Html()
+def g3 = new com.test.jenkins.workflow.deployment.g3.G3()
+def PCF = new com.test.jenkins.workflow.deployment.pcf.Pcf()
+def freeform
+
+def mavenGoal
+def pomLocation
+def pomFile
+def SonarRunner
+def location
+def command
+def paramName
+def paramValue
+def deploymentType = DeploymentTool.toString()
+def linux_node
+def current_node
+def windows_node
+def tag_node
+def Publish = Publishing.publishJunit.toString()
+def buildTagName = ""
+sharepointDeploymentsUrl='http://teams.global.test/hts/CDD/_vti_bin/listdata.svc/PcfDeploymentAuditList'
+
+def appRepositoryUrl
+def gitBranch
+pom = 'pom.xml'
+
+deployOption = 'Yes'
+cancelOption = 'No'
+def approver
+def crNumber
+
+// GSD
+gsdClosureStatuses = ["Pending", "Successful without Impact", "Successful with Impact", "Failed without Impact",
+                      "Failed with Impact", "Backed Out without Impact", "Backed Out with Impact", "Closed",
+                      "Cancelled"]
+gsdChangeRecordBaseUrl = "urlchange-order-service-eu-cdd.cf.cloud.uk.test/v1/changeOrders/";
+
+if (!(DeploymentTool.equals(null))) {
+    l.debug(DeploymentTool.model.id)
+
+    if (DeploymentTool.model.id.equals("G3_DEPLOYMENT_DETAILS")) {
+        g3.setModel(DeploymentTool, rootJobName)
+    } else if (DeploymentTool.model.id.equals("CloudFoundry")) {
+        PCF.setModel(DeploymentTool, rootJobName)
+    } else if (DeploymentTool.model.id.contains("CFFreeformDeployment")) {
+        l.debug("CFFreeformDeployment")
+        freeform = DeploymentTool
+    }
+}
+if (buildOS.equals("Linux")) {
+    env.commandLine = "sh"
+    env.javaHome = "export JAVA_HOME=/build_tools/jdk/1.7.0.51;"
+    env.gitClient = "GIT_linux-1.8.0.2"
+} else {
+    env.commandLine = "bat"
+    env.javaHome = "set JAVA_HOME=E:/build_tools/jdk/1.7.0.25&&"
+    env.gitClient = "Windows_Git"
+}
+
+def EnvSetup() {
+
+    for (i = 0; i < Tools.size(); i++) {
+        if (Tools[i].MavenVersion) {
+
+            def maven_version = Tools[i].MavenVersion + "_" + buildOS
+            env.MAVEN_HOME = tool maven_version
+            env.PATH = "${env.MAVEN_HOME}/bin/:${env.PATH}"
+            if (Tools[i].mavenOption) {
+                env.MAVEN_OPTS = Tools[i].mavenOption
+            }
+
+        } else if (Tools[i].JavaVersion) {
+
+            if (Tools[i].JavaVersion.contains("WAS")) {
+                env.JAVA_HOME = tool Tools[i].JavaVersion
+            } else {
+
+                def Java_version = Tools[i].JavaVersion + "_" + buildOS
+                env.JAVA_HOME = tool Java_version
+            }
+
+            env.PATH = "${env.JAVA_HOME}/bin/:${env.PATH}"
+        }// end if javaversion
+
+        else if (Tools[i].NodeJSVersion) {
+            def node_version = Tools[i].NodeJSVersion + "_" + buildOS
+            env.NODEJS_HOME = tool node_version
+            env.PATH = "${env.NODEJS_HOME}/bin/:${env.PATH}"
+        } else if (Tools[i].AntVersion) {
+            def ant_version = Tools[i].AntVersion + "_" + buildOS
+            env.ANT_HOME = tool ant_version
+            env.PATH = "${env.ANT_HOME}/bin/:${env.PATH}"
+        } else if (Tools[i].MSVersion) {
+            env.MSBUILD = tool Tools[i].MSVersion
+            env.PATH = "${env.MSBUILD}:${env.PATH}"
+        }
+
+    } //end for
+    if (GROUP_NAME) {
+        env.GROUP_NAME = "$GROUP_NAME"
+    } else {
+        error ' Group name is not set'
+    }
+
+    if (Variables) {
+        VariableSetup()
+    }
+} //end envSetup
+
+@NonCPS
+def VariableSetup() {
+    def myparams = currentBuild.rawBuild.getAction(ParametersAction)
+    for (ParameterValue p in myparams.parameters) {
+        paramName = p.name
+        paramValue = p.value
+        env."$paramName" = "$paramValue"
+    }
+}
+
+if (buildOS.equals("Linux")) {
+    if (env.JOB_NAME.contains("GS_CDD") || env.JOB_NAME.contains("ALM")) {
+        linux_node = "cm-linux-cdd"
+
+    } else {
+        linux_node = "cm-linux"
+    }
+    node(linux_node) {
+        NODE_NAME = en.getNodeName(buildOS)
+        current_node = NODE_NAME
+
+        l.debug("The current node is " + current_node)
+
+        if (SCM.size() > 1) {
+            l.warning("this pipeline is for a single component build")
+        }
+        if (SCM[0].GitURL) {
+            env.tagName = env.JOB_NAME + "_" + env.BUILD_NUMBER
+            echo "tagname is " + env.tagName
+            env.gitcmd = "git"
+            scmCredentialsId=SCM[0].gitcreds.getId()
+            buildTagName = getBuildTagName();
+
+            l.debug("SCM[0].componentFolder = " +  SCM[0].componentFolder)
+            componentFolder = pwd() + '/' + buildTagName +'/' + SCM[0].componentFolder
+            l.debug("componentFolder = " + componentFolder)
+
+            sh " mkdir ${buildTagName};"
+
+           dir(buildTagName) {
+                GITSCM.Gitcheckout(SCM[0], buildOS)
+                //                      appRepositoryUrl = SCM[scmAtt].GitURL
+                appRepositoryBranch = SCM[0].workspace
+
+                currentDir = componentFolder
+                artifactId = pomArtifactId(currentDir + "/${pom}")
+                groupId = pomGroupId(currentDir + "/${pom}")
+                version = pomVersion(currentDir + "/${pom}")
+
+    //                      uniqueVersion = version.substring(0, version.indexOf('SNAPSHOT')) + timestamp() + '-SNAPSHOT'
+            }
+        } else if (SCM[0].RTCurl) {
+            RTCSCM.RTCcheckout(SCM[0], buildOS)
+        } else {
+            SVNSCM.SVNcheckout(SCM[0], buildOS)
+        }
+
+        EnvSetup()
+    }//end node block
+} // end if os equals Linux
+else {
+    node("cm-windows") {
+        deleteDir()
+        NODE_NAME = en.getNodeName(buildOS)
+
+        for (def scmAtt = 0; scmAtt < SCM.size(); scmAtt++) {
+            if (SCM[scmAtt].GitURL) {
+                if (SCM[scmAtt].GitURL.startsWith("git@")) {
+                    error("Git via SSH is not supported for Windows, please use https")
+                }
+                env.gitcmd = tool "Windows_Git"
+                env.tagName = env.JOB_NAME + "_" + env.BUILD_NUMBER
+
+                // TODO handle multiple repos
+                gitUrl = SCM[scmAtt].GitURL
+                gitBranch = SCM[scmAtt].workspace
+                git(url: gitUrl, credentialsId: scmCredentialsId, branch: gitBranch)
+                GITSCM.Gitcheckout(SCM[scmAtt], buildOS)
+            } else if (SCM[scmAtt].RTCurl) {
+
+                RTCSCM.RTCcheckout(SCM[scmAtt], buildOS)
+            } else {
+                SVNSCM.SVNcheckout(SCM[scmAtt], buildOS)
+            }
+        }
+        EnvSetup()
+    }//end node block
+}  //end node block
+
+performBuild(current_node)
+
+//Perform publishing
+if (Publishing.publishJunit.toString().equals('[true]')) {
+    JunitPublishing.publishJunit(NODE_NAME, buildOS)
+}
+
+htmlPublishing.publishHTML(Arrays.asList(Publishing), NODE_NAME)
+
+if (!buildEmailNotification.equals(null)) {
+    if (!buildEmailNotification.Recipient.equals("")) {
+
+        if (buildEmailNotification.Recipient) {
+            if (env.buildFail.equals("false")) {
+                mail(to: buildEmailNotification.Recipient,
+                        subject: "  Build stage completed successfully for job '${env.JOB_NAME}' (${env.BUILD_NUMBER})",
+                        body: buildEmailNotification.Body + "\n" + "Please go to ${env.BUILD_URL}.");
+            } else {
+                mail(to: buildEmailNotification.Recipient,
+                        subject: " Build stage completed with errors job '${env.JOB_NAME}' (${env.BUILD_NUMBER} )",
+                        body: buildEmailNotification.Body + "\n" + "Please go to ${env.BUILD_URL}.");
+            }
+        }
+    }
+}
+if (env.buildFail.equals("true")) {
+    error "Build stage completed with errors"
+}
+
+if (!(DeploymentTool.equals(null))) {
+
+    l.debug("DeploymentTool.model is ${DeploymentTool.model}")
+
+    switch (DeploymentTool.model.id) {
+
+        case "G3_DEPLOYMENT_DETAILS":
+
+            l.debug("G3 Deployment defined")
+            g3.exec(NODE_NAME)
+
+            break
+        case "CloudFoundry":
+
+            l.debug("PCF Deployment defined")
+            PCF.exec(NODE_NAME)
+
+            break
+
+        case "None":
+            l.debug("Deployment not required")
+
+            break
+        default:
+            if (DeploymentTool.model.id.contains("CFFreeformDeployment")) {
+                l.debug("Freeform deploy defined")
+
+                checkoutDeploymentScripts('pcf-scripts', scmCredentialsId, current_node, buildTagName)
+
+                for (int i = 0; i < freeform.deployments.size(); i++) {
+                    def approvalGroup = "Infodir-ALMJenkins-User"
+                    def deployment = freeform.deployments[i]
+                    def pcfCredentialsId = deployment.PCF_CREDENTIALS.getId()
+
+                    l.debug("pcfCredentialsId = " + pcfCredentialsId)
+                    l.debug(deployment.model.id)
+                    def prod = deployment.model.id.contains("CFFreeformProdDeploy")                    
+                    def space = deployment.space
+                    def spaces = space.split(',');
+
+                    if (prod) {
+                        approvalGroup = "GB-App-GS-CDD-MICRO-SVC-PROD-DEPLOY-S-D"                        
+                        pcfCredentialsId = deployment.PCF_CREDENTIALS.getId()
+
+                        crNumber = gsdCRCheck(buildTagName, current_node)
+                        approver = getLatestApprover()
+                    }
+
+                    if (deployment.promoteToNexusRelease) {
+                        promoteBuild(current_node)
+                    }
+
+                    if (!deployment.auto) {
+                        response = getUserInputText("Proceed with following deployments?", spaces, approvalGroup)
+                        approver = getLatestApprover()
+                    }
+                    else {
+                        response = convertSpacesListToMap(spaces, true)
+                    }
+
+                    l.debug(response)
+
+                    for (int j = 0; j < spaces.size(); j++) {
+                        def pcfEnv = spaces[j].trim()
+                        if (response[pcfEnv]) {
+                            if (prod) {
+                                deploy(pcfEnv, pcfCredentialsId, deployment, "urlapi.system.cf.wgdc-drn-100.cloud.uk.test", "wgdc100-gs-cdd-prod", "Wakefield", crNumber, commitId, artifactId, groupId, version, prod, current_node, approver, smokeTestUrl)
+                                deploy(pcfEnv, pcfCredentialsId, deployment, "urlapi.system.cf.sydc-drn-100.cloud.uk.test", "sydc100-gs-cdd-prod", "South Yorkshire", crNumber, commitId, artifactId, groupId, version, prod, current_node, approver, smokeTestUrl)
+                            }
+                            else {
+                                deploy(pcfEnv, pcfCredentialsId, deployment, deployment.PCF_URL, deployment.PCF_ORGANISATION, "", crNumber, commitId, artifactId, groupId, version, false, current_node, approver, smokeTestUrl)
+                            }
+                        }
+                        else {
+                            stage "Deploy to " + pcfEnv
+                            l.debug("Skipping deployment to pcfEnv " + pcfEnv)
+                        }
+                    }
+
+                    checkpoint "After Deployment to " + space
+
+                }
+
+            } else {
+                error("No deployment defined")
+            }
+            break
+
+    }
+
+}
+
+private void performBuild(local_node) {
+    stage 'Build'
+    l.debug("The local node is " + local_node)
+
+    runBuild(BuildType, local_node)
+
+    checkpoint "After Build"
+}
+
+private void promoteBuild(local_node) {
+    stage 'Promote'
+    runBuild(PromotionType, local_node)
+    node(local_node) {
+        version = pomVersion(componentFolder + "/${pom}")
+    }
+    checkpoint 'After Promote'
+}
+
+private void runSmokeTest(pcfEnv, pcfUrl, smokeTestUrl, local_node) {
+    if (smokeTestUrl == null) {
+        l.warning("You have not configured a smoke test url")
+    }
+    else {
+        stage 'Smoke Test'
+        node(local_node) {
+            pcfDomain = getDomain(pcfUrl)
+            smokeTestUrl = smokeTestUrl.replaceAll('\\{space\\}', pcfEnv)
+            smokeTestUrl = smokeTestUrl.replaceAll('\\{domain\\}', pcfDomain)
+            l.debug("running the PCFSmokeTest job with the following url " + smokeTestUrl)
+            build job: 'PCFSmokeTest', parameters: [[$class: 'StringParameterValue', name: 'APP_URL', value: smokeTestUrl]]
+        }
+
+        checkpoint 'After Smoke Test'
+    }
+}
+
+private void runAcceptanceTests(local_node) {
+    stage 'Acceptance Tests'
+
+    runBuild(AcceptanceTestsType, local_node)
+    checkpoint 'After Acceptance Tests'
+}
+
+private void runBuild(buildType, local_node) {
+    if (!(buildType.size()==0)) {
+        if (!(buildType[0].mavenGoal.equals(null))) {
+            node(local_node) {
+                mavenBuild(buildType[0].mavenGoal, buildType[0].Sonar.SonarRunner, buildType[0].Sonar.SonarOptions)
+            }
+        }
+        else {
+            Workflowbuild.Build(Arrays.asList(buildType), NODE_NAME, buildOS, Publishing.publishJunit.toString())
+        }
+    }
+    else{
+        l.warning("You have configured no build steps in your workflow, please refer to http:\\<our docs> for assistance with creating jobs")
+    }
+}
+
+private void deploy(space, pcfCredentialsId, deployment, pcfUrl, pcfOrg, foundation, crNumber, commitId, artifactId, groupId, version, prod, local_node, approver, smokeTestUrl) {
+    def fdn = "";
+    if (foundation != null && !foundation.trim().length() == 0) {
+        fdn = " " + foundation;
+    }
+
+    node(local_node) {
+        stage "Deploy to " + (space + fdn)
+
+        def environment = "${deployment.PCF_ORGANISATION}/${space}"
+        def environmentType = prod ? 'PROD' : 'NON-PROD'
+        def profile = environmentType.toLowerCase()
+
+        def enableMonitoring = deployment.enableMonitoring ? 1 : 0
+
+        auditStartDeployment(environment, environmentType, foundation, version, approver, env.BUILD_TAG, crNumber, commitId, artifactId, groupId)
+
+        def startTime = new Date()
+
+        //Usage (* denotes mandatory arguments): $0 -a <PCF URL>*  -o <PCF Org>* -s <PCF Space>* -l <application name>* -u <PCF username>* -p <PCF password>* -x <[prod|non-prod]>
+        withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: "${pcfCredentialsId}", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
+            "sh" " cd '${componentFolder}'; ${deployment.command} -a ${pcfUrl} -o ${pcfOrg} -s ${space} -l ${PCF_APPLICATION_NAME} -u ${env.USERNAME} -p ${env.PASSWORD} -x ${profile} -m ${enableMonitoring}"
+        }
+
+        auditEndDeployment(environment, environmentType, foundation, version, approver, env.BUILD_TAG, crNumber, commitId, artifactId, groupId)
+
+        if (deployment.uploadToSharepoint || prod) {
+            sharepointUpload('PCF', environment, environmentType, space, foundation, version, approver, env.BUILD_NUMBER, crNumber, commitId, artifactId, groupId, startTime)
+        }
+
+        if (deployment.performSmokeTest) {
+            runSmokeTest(space, pcfUrl, smokeTestUrl, local_node)
+        }
+
+        if (deployment.runPostDeploymentTest) {
+            runAcceptanceTests(local_node)
+         }
+    }
+}
+
+node(current_node) {
+    for (def scmAtt = 0; scmAtt < SCM.size(); scmAtt++) {
+        println "This is the value of promote" + SCM[scmAtt].promoteSnapshot
+        if (SCM[scmAtt].promoteLabel) {
+            RTCSCM.RTCsnapshotPromote(SCM[scmAtt], buildOS)
+        }// end of if
+    }//end for loop
+}//end node
+
+// Push git tags if selected
+if (buildOS.equals("Linux")) {
+    tag_node = current_node
+} else {
+    tag_node = "cm-windows"
+}
+node(tag_node) {
+    for (def scmAtt = 0; scmAtt < SCM.size(); scmAtt++) {
+        if (SCM[scmAtt].GitURL) {
+            if (SCM[scmAtt].tagRepo) {
+                if (SCM[scmAtt].GitURL.startsWith("url")) {
+                    GITSCM.GitpushHTTPtags(SCM[scmAtt], buildOS)
+                } else if (SCM[scmAtt].GitURL.startsWith("git@")) {
+                    GITSCM.GitpushSSHtags(SCM[scmAtt], buildOS)
+                }
+            }
+        }
+    } //end for
+} //end node
+
+// no longer archiving build log
+//archiveBuildLog();
+node(current_node) {
+    dir(buildTagName) {
+        deleteDir()
+ }
+}
+
+@NonCPS
+def getLatestApprover() {
+    def latestApprover = null
+
+    // this returns a CopyOnWriteArrayList, safe for iteration
+    def actions = currentBuild.rawBuild.getAllActions()
+
+    for (action in actions) {
+        if (action instanceof ApproverAction) {
+            latestApprover = action.userId
+        }
+    }
+
+    return latestApprover
+}
+
+def getUserInputText(message, spaces, submitter) {
+
+    def parameters = []
+    for (int j = 0; j < spaces.size(); j++) {
+        parameters[j] = [$class: 'BooleanParameterDefinition', name: spaces[j].trim()]
+    }
+
+    def response = null
+    try {
+        timeout(300) {
+            try {
+                response = input message: message, parameters: parameters, submitter: submitter
+
+            } catch (InterruptedException _x) {
+                error "Stopping the pipeline - Aborted by user or timed out"  //ABORT button clicked
+            }
+        }
+    } catch (InterruptedException _) {
+    }
+
+    if (parameters.size() == 1) {
+        response = convertSpacesListToMap(spaces, response)
+    }
+
+    return response
+}
+
+//convert space list into a map for deployment, setting each 'deploy' flag to the supplied value
+def convertSpacesListToMap(spaces, deploy) {
+    def r = [:]
+    for (int i = 0; i < spaces.size(); i++) {
+        r[spaces[i].trim()] = deploy
+    }
+
+    return r
+}
+
+def checkoutDeploymentScripts(scripts, scmCredentialsId, local_node, buildTagName) {
+    node(local_node) {
+        checkout(poll: false, scm: [$class: 'GitSCM', branches: [[name: "develop"]], doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: buildTagName +'/' + scripts]], gitTool: env.gitClient , submoduleCfg: [], userRemoteConfigs: [
+                [credentialsId:scmCredentialsId, url: "urlalm-github.systems.uk.test/Global-Architecture-Microservices/${scripts}.git"]
+        ]])
+
+        sh("chmod -R u+x ./${buildTagName}/${scripts}/*;")
+    }
+}
+
+
+def readResult(command, lclOS) {
+    return lclOS.toLowerCase().contains("linux") ? readResultForLinux(command) : readResultForWindows(command)
+}
+
+def readResultForLinux(command) {
+    String fileName = UUID.randomUUID().toString() + ".tmp"
+    sh("${command} | tee ${fileName}")
+    def contents = readFile("${fileName}")
+    sh("rm ${fileName}")
+
+    return contents
+}
+
+def readResultForWindows(command) {
+    String fileName = UUID.randomUUID().toString() + ".tmp"
+    bat("${command} | tee ${fileName}")
+    def contents = readFile("${fileName}")
+    bat("rm ${fileName}")
+
+    return contents
+}
+
+
+def getCommitId(lclOS) {
+    return readResult("git rev-parse HEAD", lclOS)
+}
+
+def pomVersion(String path) {
+    def contents = readFile(path)
+    def project = new XmlSlurper().parseText(contents)
+    return project.version.text().trim()
+}
+
+def pomArtifactId(String path) {
+    def contents = readFile(path)
+    def project = new XmlSlurper().parseText(contents)
+    return project.artifactId.text().trim()
+}
+
+def pomGroupId(String path) {
+    def contents = readFile(path)
+    def project = new XmlSlurper().parseText(contents)
+    return project.groupId.text().trim()
+}
+
+private mavenBuild(mavenGoal, sonarRunner, sonarOptions) {
+    l.debug("starting maven build")
+
+    withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: "${scmCredentialsId}", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
+        sh "cd '${componentFolder}'\n" +
+                "git config --global user.email '${env.USERNAME}@test.com'\n" +
+                "git config --global user.name '${env.USERNAME}'\n" +
+                "git checkout ${appRepositoryBranch} \n" +
+                "mvn -B -f ${pom} ${mavenGoal} -Dusername=${env.USERNAME} -Dpassword=${env.PASSWORD}\n"
+        dir(componentFolder) {
+            commitId = getCommitId(buildOS)
+            l.debug('commitId = ' + commitId)
+        }
+    }
+
+    if (sonarRunner) {
+        stage ' Sonar '
+        if (sonarOptions) {
+            sh "cd '${componentFolder}';mvn sonar:sonar $sonarOptions"
+        }
+        else {
+            sh "cd '${componentFolder}';mvn sonar:sonar"
+        }
+    }
+}
+
+private def gsdCRCheck(buildTagName, local_node) {
+    stage 'GSD CR Input'
+
+    def gsdNumberInputParameter = [$class: 'StringParameterDefinition', name: 'GSD', defaultValue: '', description: 'Approved GSD reference number - cannot be blank and should not contain any whitespace']
+    def message = "Please enter the GSD reference number for this deployment."
+    def parameters = []
+    parameters.add(gsdNumberInputParameter)
+
+    try {
+        timeout(time: 7, unit: 'DAYS') {
+            gsdCrNumber = parseGsdCRApproverInput(input(message: message, parameters: parameters, ok: 'Confirm'))
+        }
+        checkpoint 'After GSD CR Input'
+    } catch(err)
+    {
+        l.debug("ERROR - timed out waiting for the user to enter a GSD CR number.  You have 30 minutes.")
+        error("Timed out waiting for the user to enter a GSD CR number.  You have 30 minutes.");
+    }
+
+   /* stage 'Check GSD CR Information'
+        def response = fetchGsdCRDetails(gsdCrNumber, local_node);
+
+        def changeOrder = new groovy.json.JsonSlurper().parseText(response);
+        info = "CR Number: ${changeOrder.number}, Status: ${changeOrder.status}, Summary: ${changeOrder.summary}";
+
+        // Now display data to check with user that it is the correct GSR.
+        def gsdCRInfoParameter = [$class: 'BooleanParameterDefinition', defaultValue: false, name: "${info}"]
+        message = "Is this the correct GSD CR?"
+        parameters = []
+        parameters.add(gsdCRInfoParameter)
+        try {
+            timeout(time: 30, unit: 'MINUTES') {
+                output = input(message: message, parameters: parameters, id: 'userInput')
+            }
+            checkpoint 'After Check GSD CR Information'
+        } catch(err)
+        {
+            l.debug("ERROR - timed out waiting for the user to check the GSD CR details.  You have 30 minutes.")
+            error("Timed out waiting for the user to check the GSD CR details.  You have 30 minutes.");
+        }
+
+    stage 'Wait for CR Approval and deployment window to open'
+        try {
+            timeout(time: 5, unit: 'DAYS') {
+                waitForGSDCRToBeApprovedAndInReleaseWindow(gsdCrNumber);
+            }
+            checkpoint 'After Waited for CR Approval and deployment window to open'
+        } catch(err) {
+            if(err.toString().contains("Deployment window for CR")){
+                throw err;
+            }
+            l.debug("ERROR: $err");
+            l.debug("ERROR - waiting for the CR to be approved and for the current date/time to be within the deployment window.")
+            error("Timed out waiting for the CR to be approved and for the current date/time to be within the deployment window.");
+        }
+        
+    */
+    
+    return gsdCrNumber
+}
+
+/**
+ * Check that the GSD CR number is not empty and has the
+ * correct formatting.
+ *
+ * @param gsdCrNumber
+ * @return
+ */
+private def parseGsdCRApproverInput(gsdCrNumber) {
+    l.debug("GSD CR Number: " + gsdCrNumber);
+
+    if (gsdCrNumber.isEmpty()) {
+        error('GSD reference number must be supplied')
+    } else {
+        if (!isValid(gsdCrNumber)) {
+            error("Invalid GSD reference number: '${gsdCrNumber}'")
+        } else {
+            l.debug("Proceeding with deployment using GSD reference number '${gsdCrNumber}'")
+        }
+    }
+
+    return gsdCrNumber
+}
+
+/**
+ * Waits for the GSD CR to be approved and for the change window to open. If the GSD CR
+ * enters an end status or the window closes then the pipeline will be aborted.
+ *
+ * @param gsdCrNumber the GSD CR number
+ */
+private def waitForGSDCRToBeApprovedAndInReleaseWindow(gsdCrNumber)
+{
+    keep_polling = true;
+    while(keep_polling == true) {
+        // Every 5 minutes check status of CR until it is approved and within release window or end state is set.
+        l.debug("Sleeping for 5 minutes before fetching CR information.");
+        sleep time: 5, unit: 'MINUTES'
+        def crInfo = fetchGsdCRDetails(gsdCrNumber);
+        def changeOrder = new groovy.json.JsonSlurper().parseText(crInfo);
+        def status = changeOrder.status;
+        def deploymentWindow = changeOrder.deploymentWindow;
+        l.debug("Change order information. Number:${gsdCrNumber}, Status:${status}, DeploymentWindow:${deploymentWindow}");
+        if("Approved".equals(status)) {
+            l.debug("Change '${gsdCrNumber}' is approved.");
+            if("WITHIN".equals(deploymentWindow)) {
+                l.debug("Within change window so deployment can proceed.");
+                keep_polling = false;
+            }
+            else if("AFTER".equals(deploymentWindow)) {
+                l.debug("ERROR - deployment window for CR '${gsdCrNumber}' has closed, deployment can only happen "
+                    + "when the current date/time is within the schedule start/end time of the CR.  Pipeline cannot continue.");
+                error("Deployment window for CR '${gsdCrNumber}' has closed.  Pipeline cannot continue.");
+            }
+        } else if(gsdClosureStatuses.contains(status)) {
+            // The GSD CR is closed or about to be closed.
+            l.debug("ERROR - the status of the CR '${status}' indicates that it is closed or about to be closed. "
+            + "It must be in an approved state for the deployment to commence.");
+            error("The CR status of '${status}' indicates that it is in a closed status or about to be closed.");
+        }
+    }
+}
+
+private def isValid(gsdNumber) {
+    def gsdNumberPattern = ~'([C|c][R|r])([0-9])+'
+
+    gsdNumber.trim() ==~ gsdNumberPattern
+}
+
+private def getDomain(pcfUrl) {
+    return pcfUrl.split("system.")[1]
+}
+
+private def fetchGsdCRDetails(gsdCrNumber, local_node) {
+    l.debug("Fetching information for '${gsdCrNumber}'");
+    url = gsdChangeRecordBaseUrl + gsdCrNumber;
+    node(local_node) {
+        json = sh(returnStdout: true, script: "curl -s ${url}")
+        handleErrorsFromChangeRecordService(json)
+        l.debug("Response: " + json)
+    }
+
+    return json;
+}
+
+/**
+ * Check the output from the Change record service to diagnose various problems.
+ *
+ * @param output
+ * @return
+ */
+private def handleErrorsFromChangeRecordService(output)
+{
+    if(output.contains("error_cannot_call_remote_service")) {
+        l.debug("Failed to call change record service: ${output}")
+        error("Failed to call change record service.")
+    } else if(output.contains("error_invalid_change_record_number")) {
+        l.debug("Failed to fetch CR information because CR number was invalid: ${output}")
+        error("Failed to fetch CR information because CR number was invalid.")
+    } else if(output.contains("error_invalid_xml")) {
+        l.debug("Failed to fetch CR information because XML data sent to GSD was invalid: ${output}")
+        error("Failed to fetch CR information because XML data sent to GSD was invalid.")
+    } else if(output.contains("error_cannot_call_remote_service")) {
+        l.debug("Failed to call the change record service to fetch the CR information: ${output}")
+        error("Failed to call the change record service to fetch the CR information.")
+    } else if(output.contains("error_not_found")){
+        l.debug("CR could not be found: ${output}")
+        error("CR could not be found.")
+    }
+}
+
+// Audit
+def auditStartDeployment(environment, environmentType, region, version, approver, buildTag, crNumber, commitId, artifactId, groupId) {
+    logAuditEvent("Deployment started", environment, environmentType, region, version, approver, buildTag, crNumber, commitId, artifactId, groupId)
+}
+
+def auditEndDeployment(environment, environmentType, region, version, approver, buildTag, crNumber, commitId, artifactId, groupId) {
+    logAuditEvent("Deployment ended", environment, environmentType, region, version, approver, buildTag, crNumber, commitId, artifactId, groupId)
+}
+
+private def logAuditEvent(header, environment, environmentType, region, version, approver, buildId, crNumber, commitId, artifactId, groupId) {
+    def now = new Date().format("yyyy-MM-dd HH:mm:ss")
+    def message = "environment:'${environment}', environmentType:'${environmentType}', region:'${region}', approver:'${approver}', buildId:'${buildId}', crNumber:'${crNumber}', commitId:'${commitId}', artifactId:'${artifactId}', groupId:'${groupId}', componentVersion:'${version}'"
+    echo("[AUDIT ${now}] [${header}] [${message}]")
+}
+
+def archiveBuildLog() {
+    echo "Archiving build logs into root directory - '${auditLogDirectory}'"
+
+    def destinationDirectory = getBuildLogDirectory(auditLogDirectory)
+    echo "Archiving build logs into destination directory '${destinationDirectory}'"
+
+    writeBuildLogTo(destinationDirectory)
+}
+
+private def writeBuildLogTo(String destinationDirectory) {
+    try {
+        String destinationFile = "${destinationDirectory}${File.separator}log"
+        def logText = currentBuild.rawBuild.getLogText()
+        def logFilePath = new FilePath((LocalChannel) null, destinationFile)
+        logFilePath.chmod(0644)
+        os = logFilePath.write()
+        logText.writeLogTo(0, os)
+    } catch (IOException e) {
+        error(createErrorMessage(e))
+    } catch (InterruptedException e) {
+        error(createErrorMessage(e))
+    }
+}
+
+private def getBuildLogDirectory(rootDirectory) {
+    def sep = File.separator
+    def directory = "${env.JOB_NAME}${sep}${env.BUILD_NUMBER}"
+    return "${rootDirectory}${sep}${directory}${sep}".replace(' ', '_').toString()
+}
+
+private def createErrorMessage(e) {
+    return "Unable to archive build logs for job '${env.JOB_NAME}' and build '${env.BUILD_NUMBER}': ${e.toString()}"
+}
+
+// Sharepoint
+
+def sharepointUpload(title, environment, environmentType, environmentDescription, region, version, approver, buildNumber, crNumber, commitId, artifactId, groupId, startTime) {
+
+    l.debug("Sharepoint cred id - " + auditCredentials.getId())
+
+    uploadDeployment([
+            Title          : title,
+            StartTime      : startTime,
+            EndTime        : new Date(),
+            JenkinsJob     : buildNumber.toInteger(),
+            TargetEnv      : environment,
+            EnvType        : environmentType,
+            EnvDescription : environmentDescription,
+            Region         : region,
+            ComponentName  : artifactId,
+            GroupId        : groupId,
+            ArtifactVersion: version,
+            ApproverId     : approver,
+            ApproverName   : getDisplayName(approver),
+            ChangeRecord   : crNumber,
+            CommitId       : commitId,
+    ], auditCredentials.getId(), sharepointDeploymentsUrl)
+}
+
+private def uploadDeployment(Map deployment, credentialsId, deploymentsUrl) {
+
+    validate(deployment)
+
+    withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: credentialsId, usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
+        def credentials = "'${env.USERNAME}':'${env.PASSWORD}'"
+        def json =  JsonOutput.toJson(deployment)
+
+        try {
+            sh("curl --ntlm -k -v -u ${credentials} -d '${json}' -H 'content-type:application/json' -X POST ${deploymentsUrl}")
+        } catch (err) {
+            echo("[WARNING] Upload to Sharepoint failed. The following data '${json}' will not be available on '${deploymentsUrl}': ${err}")
+        }
+    }
+}
+
+private def validate(Map deployment) {
+    try {
+        DeploymentItemSchema.newInstance(deployment)
+    } catch (MissingPropertyException e) {
+        echo("[WARNING] The deployment data provided doesn't respect the schema defined in Sharepoint: ${e.getMessage()}")
+    }
+}
+
+private def getDisplayName(userId) {
+    User usr = User.get(userId)
+    return usr != null ? usr.getDisplayName() : ''
+}
+
+private def getBuildTagName() {
+    return env.tagName.replaceAll('/', '_').replaceAll(' ', '_');
+}
+
+class DeploymentItemSchema {
+    String Title
+    @Nullable
+    Date StartTime
+    @Nullable
+    Date EndTime
+    @Nullable
+    long JenkinsJob
+    @Nullable
+    String TargetEnv
+    @Nullable
+    String EnvType
+    @Nullable
+    String EnvDescription
+    @Nullable
+    String Region
+    @Nullable
+    String ComponentName
+    @Nullable
+    String GroupId
+    @Nullable
+    String ArtifactVersion
+    @Nullable
+    String ApproverId
+    @Nullable
+    String ApproverName
+    @Nullable
+    String ChangeRecord
+    @Nullable
+    String CommitId
+}
