@@ -41,9 +41,7 @@ userRemoteConfigs: [[url: 'https://github.com/testjeet22/firsttestjeet2.git/']]]
         echo 'Building....'
     }
     stage ('Publish to UCD') {
-  script {
-                      
-			 try {
+  script {	
                             ([
                                 $class: 'UCDeployPublisher',
                                 siteName: 'UDD_PUB',
@@ -54,7 +52,7 @@ userRemoteConfigs: [[url: 'https://github.com/testjeet22/firsttestjeet2.git/']]]
                                             $class: 'com.urbancode.jenkins.plugins.ucdeploy.DeliveryHelper$Push',
                                             pushVersion: '${BUILD_NUMBER}',
                                             baseDir: '.',
-                                            fileIncludePatterns: '/var/lib/jenkins/workspace/3-pipe-jenkins/target/*',
+                                            fileIncludePatterns: '3-pipe-jenkins/target/*',
                                             fileExcludePatterns: '',
                                             pushProperties: '',
                                             pushDescription: 'Pushed from Jenkins',
@@ -62,10 +60,7 @@ userRemoteConfigs: [[url: 'https://github.com/testjeet22/firsttestjeet2.git/']]]
                                     ]
                                     ]
                             ])
-                        } catch(Exception err) {
-                            print err
-                            throw(err)
-                        }
+                        
                 }
 			}
 
