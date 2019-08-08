@@ -40,28 +40,37 @@ userRemoteConfigs: [[url: 'https://github.com/testjeet22/firsttestjeet2.git/']]]
     stage('Test') {
         echo 'Building....'
     }
-     stage ('Push to UCD...') {
-       ([$class: 'UCDeployPublisher',
-            siteName: 'UDD_PUB',
-            component: [
-                $class: 'com.urbancode.jenkins.plugins.ucdeploy.VersionHelper$VersionBlock',
-                componentName: 'JPetStore-DB',
-               // createComponent: [
-               //     $class: 'com.urbancode.jenkins.plugins.ucdeploy.ComponentHelper$CreateComponentBlock'
-               // ],
-                delivery: [
-                    $class: 'com.urbancode.jenkins.plugins.ucdeploy.DeliveryHelper$Push',
-                    pushVersion: '${BUILD_NUMBER}',
-                    baseDir: '.',
-                    fileIncludePatterns: '/var/lib/jenkins/workspace/3-pipe-jenkins/target/*.jar',
-                    fileExcludePatterns: '',
-                    pushProperties: 'jenkins.server=Local\njenkins.reviewed=false',
-                    pushDescription: 'Pushed from Jenkins',
-                    pushIncremental: false
-                ]
-            ]
-        ])
-   }
+     node {
+   step([$class: 'UCDeployPublisher',
+        siteName: 'UDD_PUB',
+        component: [
+            $class: 'com.urbancode.jenkins.plugins.ucdeploy.VersionHelper$VersionBlock',
+            componentName: 'JPetStore-DB-2',
+            delivery: [
+                $class: 'com.urbancode.jenkins.plugins.ucdeploy.DeliveryHelper$Push',
+                 pushVersion: '${BUILD_NUMBER}',
+                 baseDir: '/var/jenkins_home/workspace/UCD Test Pipeline/',
+                 fileIncludePatterns: '*',
+                 fileExcludePatterns: '.*',
+                 pushDescription: 'Pushed from Jenkins',
+                 pushIncremental: false
+             ],
+        ],
+        deploy: [
+            $class: 'com.urbancode.jenkins.plugins.ucdeploy.DeployHelper$DeployBlock',
+            deployApp: 'Jenkins',
+            deployEnv: 'Test',
+            deployProc: 'Deploy Jenkins',
+            createProcess: [
+                $class: 'com.urbancode.jenkins.plugins.ucdeploy.ProcessHelper$CreateProcessBlock',
+                processComponent: 'Deploy'
+            ],
+            deployVersions: 'Jenkins:${BUILD_NUMBER}',
+            deployOnlyChanged: false
+        ]
+    ])
+ }
+
 }
 
 //pipeline {
