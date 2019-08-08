@@ -44,7 +44,7 @@ userRemoteConfigs: [[url: 'https://github.com/testjeet22/firsttestjeet2.git/']]]
   script {
                       
 			 try {
-                            step([
+                            ([
                                 $class: 'UCDeployPublisher',
                                 siteName: 'UDD_PUB',
                                 component: [
