@@ -19,7 +19,15 @@ parameters {
 //    string(name: 'CAMUNDA_USERNAME', defaultValue: 'default_username', description: 'Camunda Basic Auth Username: Must not be empty if you use Basic Auth.')
 //    password(name: 'CAMUNDA_PASSWORD', defaultValue: 'default_password', description: 'Camunda Basic Auth Password: Must not be empty if you use Basic Auth.  WARNING: Passwords are exposed in the console output of this build script!!')
  }
- 
+ stage ('Clone repository...') {
+        checkout([$class: 'GitSCM',
+branches: [[name: '*/master']],
+doGenerateSubmoduleConfigurations: false,
+extensions: [],
+submoduleCfg: [],
+userRemoteConfigs: [[url: 'https://github.com/testjeet22/firsttestjeet2.git/']]]
+   	)
+    }
 //sonar.projectKey=java-sonar-runner-simple
     stage('Build') {
          sh '/opt/maven/bin/mvn  -B -f pom.xml clean install'
