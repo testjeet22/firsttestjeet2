@@ -41,7 +41,7 @@ userRemoteConfigs: [[url: 'https://github.com/testjeet22/firsttestjeet2.git/']]]
         echo 'Building....'
     }
      stage ('Push to UCD...') {
-       step([$class: 'UCDeployPublisher',
+       ([$class: 'UCDeployPublisher',
             siteName: 'UDD_PUB',
             component: [
                 $class: 'com.urbancode.jenkins.plugins.ucdeploy.VersionHelper$VersionBlock',
