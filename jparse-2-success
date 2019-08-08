@@ -1,0 +1,43 @@
+import groovy.json.JsonSlurper
+  import groovy.json.JsonOutput
+  import groovy.json.JsonSlurperClassic
+  
+node {
+ def json = readFile(file:'part2.json')
+ def jsonObject = new JsonSlurperClassic().parseText(json)
+ //println "JSONObject build-parameters APP_NAME : " + jsonObject
+   try {
+   
+   stage ('clone') {
+        	checkout scm
+        }
+        stage ('Build') {
+	//println "JSONObject build-parameters GIT_REPO_URL : " + jsonObject.build-parameters.GIT_REPO_URL
+        echo "color: ${jsonObject.attachments.color}"
+	 echo "fields- value : ${jsonObject.attachments.fields.value}"
+	  echo "pretext  : ${jsonObject.attachments.pretext}"
+       	sh ''' 
+		ls -l |grep part2.json
+		echo 'shell scripts to build project' 
+		
+		'''
+        }
+        stage ('Tests') {
+	        parallel 'static': {
+	            sh "echo 'shell scripts to run static tests...'"
+	        },
+	        'unit': {
+	            sh "echo 'shell scripts to run unit tests...'"
+	        },
+	        'integration': {
+	            sh "echo 'shell scripts to run integration tests...'"
+	        }
+        }
+      	stage ('Deploy') {
+            sh "echo 'shell scripts to deploy to server...'"
+      	}
+    } catch (err) {
+        currentBuild.result = 'FAILED'
+        throw err
+    }
+}

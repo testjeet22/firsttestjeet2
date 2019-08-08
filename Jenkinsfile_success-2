@@ -1,0 +1,28 @@
+pipeline {
+    agent any
+    tools {
+       maven 'maven-5'
+       // java 'java'
+    }
+    stages {
+        stage ('Initialize') {
+            steps {
+                sh '''
+                    echo "PATH = ${PATH}"
+                    echo "M2_HOME = ${M2_HOME}"
+                '''
+            }
+        }
+
+        stage ('Build') {
+            steps {
+                sh 'mvn -Dmaven.test.ignore=true install -f my-app/pom.xml' 
+            }
+            //post {
+            //    success {
+            //        junit 'target/surefire-reports/*.xml' 
+              //  }
+            //}
+        }
+    }
+}
