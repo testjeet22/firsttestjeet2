@@ -22,7 +22,7 @@ parameters {
  
 //sonar.projectKey=java-sonar-runner-simple
     stage('Build') {
-         sh 'mvn  -B -f pom.xml clean install'
+         sh '/opt/maven/bin/mvn  -B -f pom.xml clean install'
     //   echo "${CAMUNDA_URL}"
     //   echo "${CAMUNDA_ENV}"
     //   echo "${USE_BASIC_AUTH}"
