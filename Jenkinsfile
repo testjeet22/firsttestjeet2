@@ -40,36 +40,34 @@ userRemoteConfigs: [[url: 'https://github.com/testjeet22/firsttestjeet2.git/']]]
     stage('Test') {
         echo 'Building....'
     }
-     node {
-   step([$class: 'UCDeployPublisher',
-        siteName: 'UDD_PUB',
-        component: [
-            $class: 'com.urbancode.jenkins.plugins.ucdeploy.VersionHelper$VersionBlock',
-            componentName: 'JPetStore-DB-2',
-            delivery: [
-                $class: 'com.urbancode.jenkins.plugins.ucdeploy.DeliveryHelper$Push',
-                 pushVersion: '${BUILD_NUMBER}',
-                 baseDir: '/var/jenkins_home/workspace/UCD Test Pipeline/',
-                 fileIncludePatterns: '*',
-                 fileExcludePatterns: '.*',
-                 pushDescription: 'Pushed from Jenkins',
-                 pushIncremental: false
-             ],
-        ],
-        deploy: [
-            $class: 'com.urbancode.jenkins.plugins.ucdeploy.DeployHelper$DeployBlock',
-            deployApp: 'Jenkins',
-            deployEnv: 'Test',
-            deployProc: 'Deploy Jenkins',
-            createProcess: [
-                $class: 'com.urbancode.jenkins.plugins.ucdeploy.ProcessHelper$CreateProcessBlock',
-                processComponent: 'Deploy'
-            ],
-            deployVersions: 'Jenkins:${BUILD_NUMBER}',
-            deployOnlyChanged: false
-        ]
-    ])
- }
+    stage ('Publish to UCD') {
+  script {
+                      
+			 try {
+                            step([
+                                $class: 'UCDeployPublisher',
+                                siteName: 'UDD_PUB',
+                                component: [
+                                    $class: 'com.urbancode.jenkins.plugins.ucdeploy.VersionHelper$VersionBlock',
+                                    componentName: 'JPetStore-APP',
+                                    delivery: [
+                                            $class: 'com.urbancode.jenkins.plugins.ucdeploy.DeliveryHelper$Push',
+                                            pushVersion: '${BUILD_NUMBER}',
+                                            baseDir: '.',
+                                            fileIncludePatterns: '/var/lib/jenkins/workspace/3-pipe-jenkins/target/*',
+                                            fileExcludePatterns: '',
+                                            pushProperties: '',
+                                            pushDescription: 'Pushed from Jenkins',
+                                            pushIncremental: false
+                                    ]
+                                    ]
+                            ])
+                        } catch(Exception err) {
+                            print err
+                            throw(err)
+                        }
+                }
+			}
 
 }
 
