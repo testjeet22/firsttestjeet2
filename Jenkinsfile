@@ -45,7 +45,7 @@ userRemoteConfigs: [[url: 'https://github.com/testjeet22/firsttestjeet2.git/']]]
             siteName: 'UDD_PUB',
             component: [
                 $class: 'com.urbancode.jenkins.plugins.ucdeploy.VersionHelper$VersionBlock',
-                componentName: 'UCD - Pipeline',
+                componentName: 'JPetStore-APP',
                 createComponent: [
                     $class: 'com.urbancode.jenkins.plugins.ucdeploy.ComponentHelper$CreateComponentBlock'
                 ],
